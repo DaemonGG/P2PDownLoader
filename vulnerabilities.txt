@@ -1,0 +1,6 @@
+The current vulnerabilities are:
+1) SOmetime the upload timeout just happens before the first data is sent.
+2) Can not prevent man in middle attack. means can not distinguish fake ACK and DATA packets
+3) if the network environment is very very bab. there might be a situation where the first few data packets of the old connection 
+   just come and the Seq number is inside the new connecion's window room. then this downloaded chunk might be incorrect.
+4) Quite a lot of sender peers write the problem_peer-2 file at the same time, might cause some problem

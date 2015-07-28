@@ -1,0 +1,132 @@
+# set spiffy_router environment in every console first:
+export SPIFFY_ROUTER="127.0.0.1:12347"
+./hupsim.pl -m topo.map -n /tmp/nodes.map -p 12347 -v 0 &
+
+#############################################################
+####       test normal case                        ##########
+#############################################################
+#1. In gdb start two peers in different console, set breakpoints to each
+# for node 1:
+b <somewhere>
+r -p /tmp/nodes.map -c /tmp/A.haschunks -f /tmp/C.masterchunks -m 4 -i 1
+GET /tmp/B.chunks /tmp/newB.tar
+
+# if interested in how to process stdin
+# make a file foo with content "GET /tmp/B.chunks /tmp/newB.tar"
+b main
+r -p /tmp/nodes.map -c /tmp/A.haschunks -f /tmp/C.masterchunks -m 4 -i 1 <foo
+
+# for node 2:
+b <somewhere>
+r -p /tmp/nodes.map -c /tmp/B.haschunks -f /tmp/C.masterchunks -m 4 -i 2
+
+#############################################################
+####       test fast transmit                      ##########
+#############################################################
+#2. watch these two nodes send packet to each other and varify
+
+#change topo map to "1 2 300000 0.01 100" using node 1 and 2.
+#testing fast transmit file in good net environment
+r -p /tmp/nodes.map -c /tmp/B.haschunks -f /tmp/C.masterchunks -m 4 -i 2
+r -p /tmp/nodes.map -c /tmp/A.haschunks -f /tmp/C.masterchunks -m 4 -i 1
+GET /tmp/A.chunks /tmp/newA.tar
+
+#bug discription:
+#sender never clode the uploading connection
+#reason: receiver received all packets that he needs and close the conneciton. But sender has not received all ACK yet
+#debug: set timeout for each upload connection. If the receiver has closed the conneciton, the sender can detect it
+#status: solved
+
+#############################################################
+####    test continually download from single peer   ########
+#############################################################
+#2. 
+
+#change topo map to "1 2 30000 0.01 50" using node 1 and 2.
+#testing fast transmit file in good net environment
+#F.tar has 10 chunks
+r -p /tmp/nodes.map -c /tmp/B.haschunks -f /tmp/C.masterchunks -m 4 -i 2
+r -p /tmp/nodes.map -c /tmp/F.haschunks -f /tmp/C.masterchunks -m 4 -i 1
+GET /tmp/F.chunks /tmp/newF.tar
+
+#bug discription:
+#except for the first chunk, always the last 2-3 packets of received chunks are wrong
+#reason: the receiver buf is too large(buffer a whole chunk size), so everytime a packet arrive it is stored. the receiver always receive the last few packets of the last chunk when the new chunk is #downloading.
+#debug: set a receiver window size to fixed 30
+#status: solved
+
+#############################################################
+####    test concurrent download from multiple peers  #######
+#############################################################
+#3.
+
+#change topo map to "1 2 300000 0.01 50" using node 1 and 2.
+#testing fast transmit file in good net environment
+#F.tar has 10 chunks
+r -p /tmp/nodes.map -c /tmp/B.haschunks -f /tmp/C.masterchunks -m 4 -i 2
+r -p /tmp/nodes.map -c /tmp/A.haschunks -f /tmp/C.masterchunks -m 4 -i 1
+r -p /tmp/nodes.map -c /tmp/F.haschunks -f /tmp/C.masterchunks -m 4 -i 1
+GET /tmp/D.chunks /tmp/newD.tar
+#File D.chunks contains the hash of both A and B,so dowloade A and B together 
+#bug discription:
+
+#status: success
+
+#############################################################
+####    test timeout download                         #######
+#############################################################
+#4.
+
+#change topo map to "1 2 30000 0.01 10" using node 1 and 2.
+#testing fast transmit file in good net environment
+#F.tar has 10 chunks
+r -p /tmp/nodes.map -c /tmp/B.haschunks -f /tmp/C.masterchunks -m 4 -i 2
+r -p /tmp/nodes.map -c /tmp/A.haschunks -f /tmp/C.masterchunks -m 4 -i 1
+
+GET /tmp/A.chunks /tmp/newA.tar
+#check the log to see how much time elapse for each download
+#bug discription:timeout
+#reason: checking the log carefully, finding that the window size always increase to 8 and timeout drop to 1, and then bunches of illegal ACK come(ACK> last pack sent).
+# which means that this case is not congestion, or packet loss, its just datapacket tineout too small
+#debug: increase the datapacket timeout from 2 sec to 4 sec
+#result: see window size can increase to 15 
+#status: success
+
+#############################################################
+####    test receive crash                             ######
+#############################################################
+#5.
+
+#change topo map to "1 2 30000 0.01 10" using node 1 and 2.
+#testing fast transmit file in good net environment
+#F.tar has 10 chunks
+r -p /tmp/nodes.map -c /tmp/B.haschunks -f /tmp/C.masterchunks -m 4 -i 2
+r -p /tmp/nodes.map -c /tmp/A.haschunks -f /tmp/C.masterchunks -m 4 -i 1
+
+GET /tmp/A.chunks /tmp/newA.tar
+#check the log to see the last actions of sender
+#bug discription:sender keeps timeout and slowstart but never crash
+#reason: every time timeout and retransmit the packet, a new timestamp is refreshed for datapackets. So detecting crash relying on the datapackets' long timeout is infeasible
+# which means that this case is not congestion, or packet loss, its just datapacket tineout too small
+#debug: set a timer for eache upload connection, after long time of no ACK come. close connection
+#result: sender may not get all expected ack, but close normally 
+#status: solved
+
+#############################################################
+#####        test window congestion                    ######
+#############################################################
+
+#6
+
+##change topo map to "1 2 100000 0.01 10" using node 1 and 2.
+#testing fast transmit file in not bad net environment
+
+r -p /tmp/nodes.map -c /tmp/B.haschunks -f /tmp/C.masterchunks -m 4 -i 2
+r -p /tmp/nodes.map -c /tmp/A.haschunks -f /tmp/C.masterchunks -m 4 -i 1
+
+GET ../tmp/A.chunks ../tmp/newA.tar
+#check the log to see the last actions of sender
+#bug description: every time congestion happens, the window size if set to 1 and draw the pointer LPS(last packet sent) back. then sender window keeps get illegal ACK (ACK> LPS) and never advance forward
+#reason: after congestion the receiver might have received most packets sent before the sender slow start. and receiver's NPE(next pack expected) is set to some value higher than LPS. Then sender will never get the next expected ACK number.(I will ignore all illegal ACK)
+#debug: when receive ack larger than LPS, jump window to the ack number. means set LPA = ACK, and increment window by only 1.
+#state: solved
